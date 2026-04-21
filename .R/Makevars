@@ -1,0 +1,6 @@
+# Point R’s C++ build at the macOS SDK (needed for Stan/rstan on many Macs).
+# Usage: export R_MAKEVARS_USER="/path/to/Bayes Cricket/.R/Makevars"
+SDK := /Library/Developer/CommandLineTools/SDKs/MacOSX.sdk
+CXX14FLAGS += -isysroot $(SDK) -isystem $(SDK)/usr/include/c++/v1
+CXXFLAGS += -isysroot $(SDK) -isystem $(SDK)/usr/include/c++/v1
+CPPFLAGS += -isysroot $(SDK)
