@@ -13,9 +13,9 @@ fit_runs_ranking <- function(
     innings,
     context_cols = character(),
     stan_file = NULL,
-    chains = 4L,
-    iter = 2000L,
-    warmup = 1000L,
+    chains = 1L,
+    iter = 200L,
+    warmup = 100L,
     ...
 ) {
   if (!requireNamespace("rstan", quietly = TRUE)) {
@@ -89,6 +89,16 @@ fit_runs_ranking <- function(
     stop("Stan file not found: ", stan_file, call. = FALSE)
   }
 
+  # macOS: rstan needs the Command Line Tools SDK on the compiler line; the repo
+  # ships `.R/Makevars` for that. If unset, apply it when present (same as R/run_example.R).
+  if (!nzchar(Sys.getenv("R_MAKEVARS_USER", ""))) {
+    proj_root <- dirname(dirname(normalizePath(stan_file, winslash = "/", mustWork = TRUE)))
+    makevars_proj <- file.path(proj_root, ".R", "Makevars")
+    if (file.exists(makevars_proj)) {
+      Sys.setenv(R_MAKEVARS_USER = normalizePath(makevars_proj, winslash = "/"))
+    }
+  }
+
   fit <- rstan::stan(
     file = stan_file,
     data = stan_data,
@@ -153,4 +163,114 @@ best_player_probabilities <- function(fitted) {
     stringsAsFactors = FALSE
   )
   out[order(out$P_best, decreasing = TRUE), ]
+}
+
+#' Row indices for a player's most recent `k` innings.
+#'
+#' Uses `time_col` ascending so "recent" means latest in time. If `time_col` is
+#' missing, uses the order rows appear in `innings` for that player (assumed
+#' chronological).
+#'
+#' @param innings data.frame with `player_id`.
+#' @param player_id character, one player.
+#' @param k integer, number of innings.
+#' @param time_col optional column name for ordering (numeric, Date, or POSIXct).
+#' @return integer vector of row indices in `innings` (1..nrow), length <= k.
+recent_innings_row_indices <- function(innings, player_id, k, time_col = NULL) {
+  rows <- which(innings$player_id == player_id)
+  if (!length(rows)) {
+    return(integer())
+  }
+  if (!is.null(time_col)) {
+    if (!time_col %in% names(innings)) {
+      stop("time_col not found: ", time_col, call. = FALSE)
+    }
+    t <- innings[[time_col]][rows]
+    if (anyNA(t)) {
+      stop("time_col has NA for some rows.", call. = FALSE)
+    }
+    rows <- rows[order(t)]
+  }
+  n_take <- min(as.integer(k), length(rows))
+  rows[(length(rows) - n_take + 1L):length(rows)]
+}
+
+#' Compare recent innings to in-sample posterior predictive (`y_rep` from Stan).
+#'
+#' Requires the same `innings` data.frame (same row order) used in
+#' [fit_runs_ranking]. For each posterior draw, replicates `y_rep` are
+#' independent across innings conditional on parameters; the function forms the
+#' posterior predictive distribution of the **sum** or **mean** of runs over
+#' the selected innings and compares it to the observed statistic.
+#'
+#' @param fitted output of [fit_runs_ranking].
+#' @param innings same `data.frame` passed to [fit_runs_ranking].
+#' @param k number of recent innings per player (default 10).
+#' @param time_col passed to [recent_innings_row_indices]; NULL uses row order.
+#' @param stat `"sum"` or `"mean"` over the k innings.
+#' @param prob central interval mass for predictive quantiles (e.g. 0.9).
+#' @return data.frame with one row per player: observed stat, predictive quantiles,
+#'   and `ppc_p_upper` = posterior probability that replicate stat >= observed
+#'   (one-sided predictive p-value for "more extreme high" streaks).
+#' @export
+compare_recent_vs_posterior_predictive <- function(
+    fitted,
+    innings,
+    k = 10L,
+    time_col = NULL,
+    stat = c("sum", "mean"),
+    prob = 0.9
+) {
+  stat <- match.arg(stat)
+  if (!inherits(fitted, "list") || is.null(fitted$fit) || is.null(fitted$stan_data)) {
+    stop("fitted must be the return value of fit_runs_ranking().", call. = FALSE)
+  }
+  N <- fitted$stan_data$N
+  if (nrow(innings) != N) {
+    stop(
+      "innings must have the same number of rows as in the fit (",
+      N, "); got ", nrow(innings), ".",
+      call. = FALSE
+    )
+  }
+
+  y_rep <- rstan::extract(fitted$fit, pars = "y_rep", permuted = TRUE)$y_rep
+  if (is.null(y_rep) || ncol(y_rep) != N) {
+    stop("Could not extract y_rep with ncol equal to N.", call. = FALSE)
+  }
+
+  players <- fitted$player_key$player_id
+  lo <- (1 - prob) / 2
+  hi <- 1 - lo
+
+  out <- lapply(players, function(pid) {
+    idx <- recent_innings_row_indices(innings, pid, k, time_col)
+    if (!length(idx)) {
+      return(NULL)
+    }
+    obs_runs <- innings$runs[idx]
+    if (stat == "sum") {
+      obs <- sum(obs_runs)
+      pred <- rowSums(y_rep[, idx, drop = FALSE])
+    } else {
+      obs <- mean(obs_runs)
+      pred <- rowMeans(y_rep[, idx, drop = FALSE])
+    }
+    ppc_p_upper <- mean(pred >= obs)
+    data.frame(
+      player_id = pid,
+      n_innings_used = length(idx),
+      stat = stat,
+      observed = obs,
+      pred_mean = mean(pred),
+      pred_qlo = stats::quantile(pred, probs = lo),
+      pred_qhi = stats::quantile(pred, probs = hi),
+      ppc_p_upper = ppc_p_upper,
+      stringsAsFactors = FALSE
+    )
+  })
+
+  out <- do.call(rbind, out)
+  rownames(out) <- NULL
+  out
 }
