@@ -18,6 +18,10 @@ if (nzchar(mc)) {
 }
 
 source("R/fit_runs_model.R")
+source("R/fpca_age_predictors.R")
+
+# Innings-level `age` / `age_sq` in the Stan model below are separate from the
+# **season-aggregated** age–runs summaries used for exploratory curves / FPCA.
 
 innings <- read.csv("data/example_innings.csv", stringsAsFactors = FALSE)
 if (!("age" %in% names(innings))) {
@@ -166,5 +170,34 @@ summary_txt <- c(
   )
 )
 writeLines(summary_txt, con = file.path(out_dir, "age_effect_summary.txt"))
+
+if ("season" %in% names(innings)) {
+  ps <- player_season_summary(
+    innings,
+    season_col = "season",
+    age_col = "age",
+    runs_col = "runs",
+    player_col = "player_id",
+    statistic = "mean"
+  )
+  p_season <- ggplot2::ggplot(ps, ggplot2::aes(x = .data$mean_age, y = .data$mean_runs)) +
+    ggplot2::geom_point(alpha = 0.2, color = "#4338ca", size = 1) +
+    ggplot2::geom_smooth(method = "loess", se = TRUE, color = "#b91c1c", linewidth = 0.9) +
+    ggplot2::labs(
+      title = "Player–season: mean age vs mean runs per innings",
+      subtitle = "Each point is one player–season aggregate (not innings-level).",
+      x = "Mean age in season",
+      y = "Mean runs per innings in season"
+    ) +
+    ggplot2::theme_minimal() +
+    ggplot2::theme(plot.title = ggplot2::element_text(face = "bold"))
+  ggplot2::ggsave(
+    file.path(out_dir, "season_mean_age_vs_mean_runs.png"),
+    p_season,
+    width = 8,
+    height = 5,
+    dpi = 120
+  )
+}
 
 cat("Saved age investigation plots to:", normalizePath(out_dir), "\n")

@@ -74,32 +74,55 @@ player_log_typical_mean_runs <- function(fitted) {
   log_typ
 }
 
-#' 1) Age vs residual (runs minus posterior mean expected runs).
-plot_age_vs_residual <- function(innings, fitted, age_col = "age", out_path) {
+#' 1) Player–season level: mean age vs mean innings residual (then LOESS).
+#'
+#' Aggregates `runs - posterior_mean_expected` within each `player_id` × `season`,
+#' plots **mean_age** in that season on the x-axis.
+plot_age_vs_residual <- function(
+    innings,
+    fitted,
+    season_col = "season",
+    age_col = "age",
+    out_path
+) {
   if (!requireNamespace("ggplot2", quietly = TRUE)) {
     stop("Install ggplot2.", call. = FALSE)
   }
   validate_fitted_innings(fitted, innings)
   if (!age_col %in% names(innings)) {
-    stop("Column ", age_col, " not found (needed for age vs residual).", call. = FALSE)
+    stop("Column ", age_col, " not found.", call. = FALSE)
+  }
+  if (!season_col %in% names(innings)) {
+    stop("Column ", season_col, " not found (season-level residual plot).", call. = FALSE)
   }
   mu_hat <- posterior_mean_expected_runs(fitted)
   df <- data.frame(
+    player_id = innings$player_id,
+    season = innings[[season_col]],
     age = as.numeric(innings[[age_col]]),
-    runs = as.integer(innings$runs),
-    expected = mu_hat,
-    residual = innings$runs - mu_hat,
-    player_id = innings$player_id
+    residual = as.numeric(innings$runs) - mu_hat,
+    stringsAsFactors = FALSE
   )
-  p <- ggplot2::ggplot(df, ggplot2::aes(x = .data$age, y = .data$residual)) +
+  a1 <- stats::aggregate(residual ~ player_id + season, data = df, FUN = mean)
+  names(a1)[3] <- "mean_resid"
+  a2 <- stats::aggregate(age ~ player_id + season, data = df, FUN = mean)
+  names(a2)[3] <- "mean_age"
+  a3 <- stats::aggregate(residual ~ player_id + season, data = df, FUN = length)
+  names(a3)[3] <- "n_innings"
+  se <- merge(merge(a1, a2, by = c("player_id", "season")), a3, by = c("player_id", "season"))
+
+  p <- ggplot2::ggplot(se, ggplot2::aes(x = .data$mean_age, y = .data$mean_resid)) +
     ggplot2::geom_hline(yintercept = 0, linetype = "dashed", color = "#9ca3af") +
-    ggplot2::geom_point(alpha = 0.12, color = "#1d4ed8", size = 0.8) +
+    ggplot2::geom_point(ggplot2::aes(size = .data$n_innings), alpha = 0.2, color = "#1d4ed8") +
+    ggplot2::scale_size_area(max_size = 4) +
     ggplot2::geom_smooth(method = "loess", se = TRUE, color = "#dc2626", linewidth = 1) +
     ggplot2::labs(
-      title = "Innings residual vs age (model mean vs observed runs)",
-      subtitle = "Residual = observed − posterior mean E[runs | model]; LOESS trend.",
-      x = age_col,
-      y = "Residual (runs)"
+      title = "Player–season mean residual vs mean age",
+      subtitle = paste0(
+        "Each point = one player–", season_col, "; residual = observed − E[runs|model] per innings, averaged."
+      ),
+      x = paste0("Mean ", age_col, " within season"),
+      y = "Mean residual runs (within season)"
     ) +
     ggplot2::theme_minimal() +
     ggplot2::theme(plot.title = ggplot2::element_text(face = "bold"))
@@ -165,8 +188,15 @@ plot_shrinkage_dashboard <- function(innings, fitted, out_prefix) {
   invisible(c(p1_path, p2_path))
 }
 
-#' 3) k-means on mean fPC scores per player; scatter + save assignments.
-plot_trajectory_clusters <- function(innings, fitted, k = 4L, out_png, out_csv) {
+#' 3) k-means on fPC scores at **player–season** resolution (one point per season).
+plot_trajectory_clusters <- function(
+    innings,
+    fitted,
+    season_col = "season",
+    k = 4L,
+    out_png,
+    out_csv
+) {
   if (!requireNamespace("ggplot2", quietly = TRUE)) {
     stop("Install ggplot2.", call. = FALSE)
   }
@@ -176,19 +206,25 @@ plot_trajectory_clusters <- function(innings, fitted, k = 4L, out_png, out_csv) 
     message("Skipping trajectory clusters: need at least two fpc_age_* columns on innings.")
     return(invisible(NULL))
   }
-  ag <- stats::aggregate(innings[, fcols, drop = FALSE], by = list(player_id = innings$player_id), FUN = mean)
+  if (!season_col %in% names(innings)) {
+    message("Skipping trajectory clusters: missing season column ", season_col, ".")
+    return(invisible(NULL))
+  }
+  key <- paste(innings$player_id, innings[[season_col]], sep = "||")
+  w <- !duplicated(key)
+  cldf <- innings[w, , drop = FALSE]
   set.seed(42L)
-  km <- stats::kmeans(ag[, fcols, drop = FALSE], centers = as.integer(k), nstart = 25L)
-  ag$cluster <- km$cluster
-  write.csv(ag, out_csv, row.names = FALSE)
+  km <- stats::kmeans(cldf[, fcols, drop = FALSE], centers = as.integer(k), nstart = 25L)
+  cldf$cluster <- km$cluster
+  write.csv(cldf[, c("player_id", season_col, fcols, "cluster"), drop = FALSE], out_csv, row.names = FALSE)
 
   pc1 <- fcols[[1L]]
   pc2 <- if (length(fcols) >= 2L) fcols[[2L]] else fcols[[1L]]
-  p <- ggplot2::ggplot(ag, ggplot2::aes(x = .data[[pc1]], y = .data[[pc2]], color = factor(.data$cluster))) +
+  p <- ggplot2::ggplot(cldf, ggplot2::aes(x = .data[[pc1]], y = .data[[pc2]], color = factor(.data$cluster))) +
     ggplot2::geom_point(size = 2, alpha = 0.75) +
     ggplot2::labs(
-      title = "Trajectory clusters (k-means on mean fPC scores per player)",
-      subtitle = paste0("k = ", k, "; requires fpc_age_* columns from append_historical_age_curve_pc_scores()."),
+      title = "Trajectory clusters (k-means on fPC scores per player–season)",
+      subtitle = paste0("k = ", k, "; one row per player–", season_col, "."),
       x = pc1,
       y = pc2,
       color = "Cluster"
@@ -360,15 +396,18 @@ run_all_actionable_views <- function(
 
   validate_fitted_innings(fitted, innings)
 
-  if (age_col %in% names(innings)) {
+  if (age_col %in% names(innings) && season_col %in% names(innings)) {
     plot_age_vs_residual(
       innings,
       fitted,
+      season_col = season_col,
       age_col = age_col,
-      out_path = file.path(plot_dir, "age_vs_residual.png")
+      out_path = file.path(plot_dir, "season_age_vs_residual.png")
     )
   } else {
-    message("Skipping age_vs_residual: column `", age_col, "` not found.")
+    message(
+      "Skipping season_age_vs_residual: need `", age_col, "` and `", season_col, "`."
+    )
   }
 
   plot_shrinkage_dashboard(
@@ -380,6 +419,7 @@ run_all_actionable_views <- function(
   traj <- plot_trajectory_clusters(
     innings,
     fitted,
+    season_col = season_col,
     k = cluster_k,
     out_png = file.path(plot_dir, "trajectory_clusters.png"),
     out_csv = file.path(out_dir, "trajectory_clusters.csv")

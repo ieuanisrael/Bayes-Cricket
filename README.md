@@ -21,6 +21,7 @@ Your CSV must include at least:
 
 - **`player_id`** — any character/id per batter.
 - **`runs`** — non-negative integer, runs in that innings.
+- **`season`** (recommended) — any label that identifies the competition season for that row; required for **season-level** age curves / FPCA and for several actionable plots. The example file uses short codes such as `P001_01` (player + block index).
 
 Optional **context** columns (passed via `--context` or `context_cols` in R):
 
@@ -64,12 +65,14 @@ Rscript R/run_reproducible_model.R \
 | `--iter` / `--warmup` / `--seed` | 800 / 400 / 42 | Sampling controls. |
 | `--stan` | `stan/runs_nb_hierarchical.stan` | Alternative Stan file. |
 | `--adapt-delta` | `0.9` | HMC; increase if you see divergences. |
-| `--fpca-age-k` | `0` | If `K > 0`, builds **historical** age–run curves per innings, PCA-reduces to `fpc_age_1`…`fpc_age_K`, and appends them to `--context`. Requires column **`age`**. See `R/fpca_age_predictors.R`. |
-| `--fpca-time-col` | (none) | Optional column for chronological order within each player. |
+| `--fpca-age-k` | `0` | If `K > 0`, aggregates to **player–season**, builds curves of prior-season `(mean_age, mean_runs)` on an age grid, PCA → `fpc_age_*`, merged to innings. Needs **`age`** + **`season`** (see `--fpca-season-col`). |
+| `--fpca-season-col` | `season` | Season id for aggregation. |
+| `--fpca-season-fallback` | off | If `TRUE`, use `floor(age)` as season when missing (**demo only**). |
+| `--fpca-statistic` | `mean` | `mean` or `median` within-season runs for the curve. |
 
 Environment variables **`DATA`**, **`CONTEXT`**, **`MC_CORES`**, **`ITER`**, etc., override defaults when a flag is omitted. Run **`Rscript R/run_reproducible_model.R --help`** for the full list.
 
-**Functional predictor (age):** Each row’s curve uses only **past** innings for that batter (same player, earlier time order), evaluated on a common age grid, then **PCA** scores are merged as numeric covariates. That is **discretized FPCA** (PCA on curve values); for sparse irregular ages you can replace the PCA step with `fdapace::FPCA` and still merge scores into `context_cols`. The hierarchical Stan model is unchanged: scores enter **`X`** like any other numeric context (then **scaled** in R before Stan).
+**Season-level age curves:** Curves are built from **seasonal** summaries (mean/median runs per innings in the season vs mean age in the season), using only **previous seasons** for that player, then discretized **PCA**; scores are attached to every innings in that season. Stan still models **innings-level** outcomes.
 
 **Outputs** (under `--out`):
 
@@ -92,7 +95,7 @@ Rscript R/run_actionable_views.R \
   --fpca-age-k 0
 ```
 
-This writes **`plots/`**: age vs residual, shrinkage (two panels), season observed vs posterior-mean expected totals (uses column **`season`** if present, else **`match_date`** year, else **`floor(age)`** as a fallback label), plus **`next_season_threshold.csv`**: Monte Carlo **`P(sum of n_future innings runs > threshold)`** per player (constant mean draw at that player’s **average covariate** row — a simple “one number” summary; tune **`--threshold`**, **`--n-future`**). If **`fpc_age_*`** columns exist on the CSV, **`trajectory_clusters.png`** and **`trajectory_clusters.csv`** (k-means on mean fPCs per player) are produced.
+This writes **`plots/`**: **season-level** mean age vs mean residual (`season_age_vs_residual.png`), shrinkage (two panels), season observed vs posterior-mean expected totals (uses **`season`**, else **`match_date`** year, else **`floor(age)`**), plus **`next_season_threshold.csv`**: Monte Carlo **`P(sum of n_future innings runs > threshold)`** per player. If **`fpc_age_*`** exist, **`trajectory_clusters.*`** runs k-means on **one row per player–season** (not averaged over players).
 
 ---
 

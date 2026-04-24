@@ -91,7 +91,10 @@ Options:
   --fitted PATH   fitted.rds from fit_runs_ranking()
   --data PATH     Same innings CSV (and row order) as used for the fit
   --out DIR       Output directory for plots/ and CSVs
-  --fpca-age-k K  If >0, append historical FPC columns before views (must match fit)
+  --fpca-age-k K  If >0, append season-level FPC columns (must match fit; see --fpca-season-col)
+  --fpca-season-col NAME  (default season)
+  --fpca-season-fallback TRUE  synthetic season from floor(age) if column missing
+  --fpca-statistic mean|median
   --threshold N   For next-season table (default 350)
   --n-future N    Innings to sum in simulation (default 20)
   --cluster-k K   k-means clusters (default 4)
@@ -131,11 +134,17 @@ innings <- read.csv(data_path, stringsAsFactors = FALSE)
 
 if (fpca_k > 0L) {
   source(file.path(proj, "R", "fpca_age_predictors.R"))
-  tcol <- opt[["fpca-time-col"]]
-  if (is.null(tcol) || !nzchar(as.character(tcol)) || tcol == "TRUE") {
-    tcol <- NULL
-  }
-  innings <- append_historical_age_curve_pc_scores(innings, time_order_col = tcol, K = fpca_k)
+  scol <- opt[["fpca-season-col"]] %||% "season"
+  fb <- tolower(as.character(opt[["fpca-season-fallback"]] %||% ""))
+  synthetic <- fb %in% c("true", "1", "yes")
+  stat <- tolower(as.character(opt[["fpca-statistic"]] %||% "mean"))
+  innings <- append_historical_age_curve_pc_scores(
+    innings,
+    season_col = scol,
+    statistic = stat,
+    synthetic_season_from_age = synthetic,
+    K = fpca_k
+  )
 }
 
 run_all_actionable_views(

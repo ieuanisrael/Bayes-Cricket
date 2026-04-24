@@ -152,9 +152,12 @@ Bayes-Cricket: fit hierarchical runs model (reproducible)
   --seed N
   --stan PATH     Stan file (default: stan/runs_nb_hierarchical.stan)
   --adapt-delta   Passed to rstan (default: env ADAPT_DELTA or 0.9)
-  --fpca-age-k K  If K>0, append K historical age-curve PC scores (see R/fpca_age_predictors.R)
-                  and add them to --context automatically. Requires numeric column `age`.
-  --fpca-time-col NAME  Optional column for time ordering within player (else row order).
+  --fpca-age-k K  If K>0, append K **season-level** age-curve PC scores (see R/fpca_age_predictors.R)
+                  and add them to --context automatically. Requires `age` and a **season** column
+                  (see --fpca-season-col).
+  --fpca-season-col NAME  Season id column (default: season). Used to aggregate innings → player–season.
+  --fpca-season-fallback  If set (TRUE), build season from floor(age) when season column missing (demo only).
+  --fpca-statistic mean|median  Season curve uses mean or median innings runs (default: mean).
   -h, --help
 
 Writes: <out>/fitted.rds, <out>/context_betas.csv, <out>/run_manifest.txt, <out>/plots/*.png
@@ -178,6 +181,8 @@ fpca_k <- suppressWarnings(as.integer(opt[["fpca-age-k"]] %||% Sys.getenv("FPCA_
 if (is.na(fpca_k)) {
   fpca_k <- 0L
 }
+fpca_season_col <- opt[["fpca-season-col"]] %||% "season"
+fpca_statistic <- tolower(as.character(opt[["fpca-statistic"]] %||% "mean"))
 
 log_msg("Project root: ", normalizePath(proj, winslash = "/"))
 log_msg("Data: ", data_path)
@@ -196,13 +201,16 @@ innings <- read.csv(data_path, stringsAsFactors = FALSE)
 
 if (fpca_k > 0L) {
   source(file.path(proj, "R", "fpca_age_predictors.R"))
-  tcol <- opt[["fpca-time-col"]]
-  if (is.null(tcol) || !nzchar(as.character(tcol)) || tcol == "TRUE") {
-    tcol <- NULL
+  fb <- tolower(as.character(opt[["fpca-season-fallback"]] %||% ""))
+  synthetic <- fb %in% c("true", "1", "yes")
+  if (!fpca_statistic %in% c("mean", "median")) {
+    stop("--fpca-statistic must be mean or median", call. = FALSE)
   }
   innings <- append_historical_age_curve_pc_scores(
     innings,
-    time_order_col = tcol,
+    season_col = fpca_season_col,
+    statistic = fpca_statistic,
+    synthetic_season_from_age = synthetic,
     K = fpca_k
   )
   fc_names <- grep("^fpc_age_[0-9]+$", names(innings), value = TRUE)
@@ -261,6 +269,8 @@ manifest <- c(
       "0"
     }
   ),
+  paste0("fpca_season_col: ", fpca_season_col),
+  paste0("fpca_statistic: ", fpca_statistic),
   paste0("stan_file: ", normalizePath(stan_file, winslash = "/")),
   paste0("chains: ", chains, "  iter: ", iter, "  warmup: ", warmup, "  seed: ", seed, "  adapt_delta: ", ad_delta)
 )
