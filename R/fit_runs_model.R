@@ -7,21 +7,13 @@
 #' @param stan_file path to `runs_nb_hierarchical.stan`. Default: `./stan/runs_nb_hierarchical.stan` under `getwd()`.
 #' @param chains, iter, warmup passed to `rstan::stan`.
 #' @param ... additional arguments to `rstan::stan`.
-#' @return list with `fit` (stanfit), `player_key` (id -> name), `context_info`.
+#' Build Stan design matrices from an innings table (same logic as [fit_runs_ranking]).
+#'
+#' @param innings `data.frame` with `player_id`, `runs`, and any `context_cols`.
+#' @param context_cols character vector of predictor column names.
+#' @return List with `innings`, `players`, `player_idx`, `y`, `X`, `J`, `beta_names`, `n_players`.
 #' @export
-fit_runs_ranking <- function(
-    innings,
-    context_cols = character(),
-    stan_file = NULL,
-    chains = 1L,
-    iter = 200L,
-    warmup = 100L,
-    ...
-) {
-  if (!requireNamespace("rstan", quietly = TRUE)) {
-    stop("Install rstan: install.packages(\"rstan\")", call. = FALSE)
-  }
-
+stan_design_from_innings <- function(innings, context_cols = character()) {
   req <- c("player_id", "runs")
   miss <- setdiff(req, names(innings))
   if (length(miss)) {
@@ -73,6 +65,43 @@ fit_runs_ranking <- function(
     J <- ncol(X)
   }
 
+  list(
+    innings = innings,
+    players = players,
+    n_players = n_players,
+    player_idx = player_idx,
+    y = y,
+    X = X,
+    J = J,
+    beta_names = beta_names
+  )
+}
+
+#' @return list with `fit` (stanfit), `player_key` (id -> name), `context_info`.
+#' @export
+fit_runs_ranking <- function(
+    innings,
+    context_cols = character(),
+    stan_file = NULL,
+    chains = 1L,
+    iter = 200L,
+    warmup = 100L,
+    ...
+) {
+  if (!requireNamespace("rstan", quietly = TRUE)) {
+    stop("Install rstan: install.packages(\"rstan\")", call. = FALSE)
+  }
+
+  des <- stan_design_from_innings(innings, context_cols)
+  innings <- des$innings
+  players <- des$players
+  n_players <- des$n_players
+  player_idx <- des$player_idx
+  y <- des$y
+  X <- des$X
+  J <- des$J
+  beta_names <- des$beta_names
+
   stan_data <- list(
     N = nrow(innings),
     y = y,
@@ -107,6 +136,19 @@ fit_runs_ranking <- function(
     warmup = warmup,
     ...
   )
+
+  ex <- suppressWarnings(tryCatch(
+    rstan::extract(fit, pars = "mu_global", permuted = TRUE)$mu_global,
+    error = function(e) NULL
+  ))
+  if (is.null(ex) || !length(ex)) {
+    stop(
+      "Stan produced no samples (sampling failed or was interrupted). ",
+      "Check printed errors (e.g. divergences, RNG overflow in generated quantities). ",
+      "Try more chains, higher adapt_delta, tighter priors on beta, or fewer predictors.",
+      call. = FALSE
+    )
+  }
 
   player_key <- data.frame(
     player_id = players,

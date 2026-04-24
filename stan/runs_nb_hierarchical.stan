@@ -20,11 +20,12 @@ parameters {
   real<lower=0> sigma_player;
 
   vector[J] beta;
-  real<lower=0.001> phi_inv;
+  // Upper bound prevents phi -> 0 (numerical failure) when phi_inv explodes.
+  real<lower=0.001, upper=200> phi_inv;
 }
 
 transformed parameters {
-  real<lower=0.001> phi = inv(phi_inv);
+  real<lower=0.005> phi = inv(phi_inv);
   vector[n_players] theta;
   theta = mu_global + sigma_player * z_player;
 }
@@ -50,7 +51,9 @@ generated quantities {
   vector[N] log_lik;
   for (n in 1:N) {
     real eta_n = theta[player_idx[n]] + X[n] * beta;
-    y_rep[n] = neg_binomial_2_log_rng(eta_n, phi);
+    // Cap only for RNG: extreme eta can overflow neg_binomial_2_log_rng (gamma > 2^30).
+    real eta_rep = fmin(9.0, fmax(-4.0, eta_n));
+    y_rep[n] = neg_binomial_2_log_rng(eta_rep, phi);
     log_lik[n] = neg_binomial_2_log_lpmf(y[n] | eta_n, phi);
   }
 }

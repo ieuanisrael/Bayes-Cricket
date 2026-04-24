@@ -152,6 +152,9 @@ Bayes-Cricket: fit hierarchical runs model (reproducible)
   --seed N
   --stan PATH     Stan file (default: stan/runs_nb_hierarchical.stan)
   --adapt-delta   Passed to rstan (default: env ADAPT_DELTA or 0.9)
+  --fpca-age-k K  If K>0, append K historical age-curve PC scores (see R/fpca_age_predictors.R)
+                  and add them to --context automatically. Requires numeric column `age`.
+  --fpca-time-col NAME  Optional column for time ordering within player (else row order).
   -h, --help
 
 Writes: <out>/fitted.rds, <out>/context_betas.csv, <out>/run_manifest.txt, <out>/plots/*.png
@@ -171,6 +174,11 @@ if (is.na(ad_delta)) {
   ad_delta <- 0.9
 }
 
+fpca_k <- suppressWarnings(as.integer(opt[["fpca-age-k"]] %||% Sys.getenv("FPCA_AGE_K", unset = "0")))
+if (is.na(fpca_k)) {
+  fpca_k <- 0L
+}
+
 log_msg("Project root: ", normalizePath(proj, winslash = "/"))
 log_msg("Data: ", data_path)
 log_msg("Context columns: ", if (length(context_cols)) {
@@ -185,6 +193,23 @@ if (!file.exists(data_path)) {
 }
 
 innings <- read.csv(data_path, stringsAsFactors = FALSE)
+
+if (fpca_k > 0L) {
+  source(file.path(proj, "R", "fpca_age_predictors.R"))
+  tcol <- opt[["fpca-time-col"]]
+  if (is.null(tcol) || !nzchar(as.character(tcol)) || tcol == "TRUE") {
+    tcol <- NULL
+  }
+  innings <- append_historical_age_curve_pc_scores(
+    innings,
+    time_order_col = tcol,
+    K = fpca_k
+  )
+  fc_names <- grep("^fpc_age_[0-9]+$", names(innings), value = TRUE)
+  context_cols <- unique(c(context_cols, fc_names))
+  log_msg("Historical age-curve PC columns: ", paste(fc_names, collapse = ", "))
+}
+
 log_msg("Rows: ", nrow(innings), "; fitting ...")
 
 t0 <- Sys.time()
@@ -201,6 +226,10 @@ fitted <- fit_runs_ranking(
   refresh = 50L
 )
 log_msg("Sampling finished in ", round(difftime(Sys.time(), t0, units = "mins"), 2), " min")
+
+if (is.null(fitted$fit)) {
+  stop("fit_runs_ranking returned no Stan fit.", call. = FALSE)
+}
 
 saveRDS(fitted, file = file.path(out_dir, "fitted.rds"))
 log_msg("Saved: ", file.path(out_dir, "fitted.rds"))
@@ -224,6 +253,14 @@ manifest <- c(
   paste0("date_utc: ", format(as.POSIXct(Sys.time(), tz = "UTC"), usetz = TRUE)),
   paste0("data_file: ", data_path),
   paste0("context_columns: ", paste(context_cols, collapse = ", ")),
+  paste0(
+    "fpca_age_k: ",
+    if (!is.na(fpca_k) && fpca_k > 0L) {
+      as.character(fpca_k)
+    } else {
+      "0"
+    }
+  ),
   paste0("stan_file: ", normalizePath(stan_file, winslash = "/")),
   paste0("chains: ", chains, "  iter: ", iter, "  warmup: ", warmup, "  seed: ", seed, "  adapt_delta: ", ad_delta)
 )

@@ -1,0 +1,8 @@
+r_version: R version 4.1.1 (2021-08-10)
+working_dir: /Users/ieuanisrael/Documents/Bayes-Cricket
+date_utc: 2026-04-24 10:10:30 AEST
+data_file: /Users/ieuanisrael/Documents/Bayes-Cricket/data/example_innings.csv
+context_columns: is_home, opp_strength, format, fpc_age_1, fpc_age_2, fpc_age_3
+fpca_age_k: 3
+stan_file: /Users/ieuanisrael/Documents/Bayes-Cricket/stan/runs_nb_hierarchical.stan
+chains: 2  iter: 100  warmup: 50  seed: 42  adapt_delta: 0.9
